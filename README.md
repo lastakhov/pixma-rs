@@ -32,14 +32,14 @@ This driver bridges the gap: it translates between macOS's native AirScan protoc
 
 ### Option 1: .pkg installer (easiest)
 
-Download `PixmaDriver-0.1.0.pkg` from [Releases](https://github.com/pdrgds/pixma-rs/releases). Right-click, Open (to bypass Gatekeeper since it's unsigned).
+Download `PixmaDriver-0.1.2.pkg` from [Releases](https://github.com/lastakhov/pixma-rs/releases). Right-click, Open (to bypass Gatekeeper since it's unsigned).
 
 This installs the CLI, starts the bridge daemon, and registers the printer with CUPS. Printing and scanning work immediately.
 
 ### Option 2: From source
 
 ```bash
-git clone https://github.com/pdrgds/pixma-rs.git
+git clone https://github.com/lastakhov/pixma-rs.git
 cd pixma-rs
 cargo build --release
 
