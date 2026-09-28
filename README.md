@@ -69,7 +69,7 @@ pixma print document.pdf
 
 Several PIXMA devices on the same network are supported side by side.
 
-**Scanning.** The bridge daemon bridges every scan-capable printer it discovers: each one gets its own eSCL service (ports 8470, 8471, …) advertised under the printer's own network name, so each scanner shows up separately in Image Capture and Preview. Two identical models that share a name are told apart by serial number, e.g. `Canon G3010 series` and `Canon G3010 series (012345)`. To bridge just one printer, run `pixma-bridge --device <ip>`.
+**Scanning.** The bridge daemon watches the network and bridges every scan-capable Canon printer it finds: each one gets its own eSCL service (ports 8470, 8471, …) advertised under the printer's own network name, so each scanner shows up separately in Image Capture and Preview. Scanners powered on later are picked up automatically, and two identical models that share a name are told apart by serial number, e.g. `Canon G3010 series` and `Canon G3010 series (012345)`. To bridge just one printer, run `pixma-bridge --device <ip>`.
 
 **Terminal.** `pixma discover` lists every device with its name, IP and serial number. `--device` accepts an IP address or any unique part of a printer's name, model or serial:
 
