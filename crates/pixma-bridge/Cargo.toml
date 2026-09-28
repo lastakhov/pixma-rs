@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 pixma-protocol = { path = "../pixma-protocol" }
+clap.workspace = true
 axum.workspace = true
 quick-xml.workspace = true
 uuid.workspace = true

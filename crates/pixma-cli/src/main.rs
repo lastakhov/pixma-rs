@@ -1,3 +1,4 @@
+mod device;
 mod discover;
 mod print;
 mod scan;
@@ -38,7 +39,8 @@ enum Commands {
         #[arg(short, long)]
         format: Option<String>,
 
-        /// Device IP address (auto-discovers if omitted)
+        /// Device to use: IP address, or a unique part of the printer's
+        /// network name / model / serial number (auto-discovers if omitted)
         #[arg(short, long)]
         device: Option<String>,
     },
@@ -48,7 +50,8 @@ enum Commands {
         /// File to print (PDF, PNG, JPEG)
         file: String,
 
-        /// Device IP address (auto-discovers if omitted)
+        /// Device to use: IP address, or a unique part of the printer's
+        /// network name / model / serial number (auto-discovers if omitted)
         #[arg(short, long)]
         device: Option<String>,
     },

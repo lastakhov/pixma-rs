@@ -1,32 +1,68 @@
 #!/bin/bash
 
-# Discover Canon printer and register with CUPS for printing.
+# Register every discovered Canon printer with CUPS for printing, each with a
+# unique queue name so multiple PIXMA devices coexist.
 #
-# Register using the printer's mDNS/Bonjour (dnssd://) device URI rather than a
-# static IP. A hardcoded IP breaks whenever DHCP reassigns the printer's address;
-# the dnssd name resolves to the current address on every job, the same way the
-# scan bridge discovers the device via mDNS.
-DEVICE_URI=""
+# Registration uses the printer's mDNS/Bonjour (dnssd://) device URI rather
+# than a static IP. A hardcoded IP breaks whenever DHCP reassigns the
+# printer's address; the dnssd name resolves to the current address on every
+# job, the same way the scan bridge discovers the device via mDNS.
 
-# Prefer the dnssd:// URI that CUPS itself discovers via Bonjour.
+# Collect Canon dnssd URIs discovered by CUPS (Bonjour may need a few seconds
+# after install to surface them).
+URIS=""
 for attempt in 1 2 3 4 5; do
-    DEVICE_URI=$(lpinfo -v 2>/dev/null | awk '/dnssd:\/\// && /[Cc]anon/ {print $2; exit}')
-    [ -n "$DEVICE_URI" ] && break
+    URIS=$(lpinfo -v 2>/dev/null | awk '/dnssd:\/\// && /[Cc]anon/ {print $2}')
+    [ -n "$URIS" ] && break
     sleep 2
 done
 
-# Fall back to a static IP from our own mDNS discovery if CUPS did not surface a
+# Fall back to static IPs from our own mDNS discovery if CUPS did not surface a
 # dnssd URI (e.g. Bonjour blocked). Less robust against DHCP changes.
-if [ -z "$DEVICE_URI" ]; then
-    PRINTER_IP=$(/usr/local/bin/pixma discover 2>/dev/null | grep "IP:" | head -1 | awk '{print $2}')
-    [ -n "$PRINTER_IP" ] && DEVICE_URI="ipp://${PRINTER_IP}:631/ipp/print"
+if [ -z "$URIS" ]; then
+    URIS=$(/usr/local/bin/pixma discover 2>/dev/null | awk '/^  IP:/ {print "ipp://"$2":631/ipp/print"}')
 fi
 
-if [ -n "$DEVICE_URI" ]; then
-    lpadmin -p "Canon_G3010" -E -v "$DEVICE_URI" -m everywhere 2>/dev/null
-fi
+# Derive a CUPS-safe queue name from the device URI:
+#   dnssd://Canon%20G3010%20series._ipp._tcp.local/ -> Canon_G3010_series
+#   ipp://192.168.1.50:631/ipp/print                -> Canon_192_168_1_50
+queue_name() {
+    case "$1" in
+        ipp://*)
+            printf 'Canon_%s' "$(printf '%s' "$1" | sed -e 's|^ipp://||' -e 's|:.*$||' | tr . _)"
+            ;;
+        *)
+            printf '%s' "$1" \
+                | sed -e 's|^dnssd://||' -e 's|\._ipp._tcp\.local.*$||' \
+                | sed -e 's|%[0-9A-Fa-f][0-9A-Fa-f]|_|g' \
+                | tr -c 'A-Za-z0-9_' '_'
+            ;;
+    esac
+}
 
-# Install LaunchAgent
+i=0
+seen=" "
+for uri in $URIS; do
+    i=$((i+1))
+    name=$(queue_name "$uri")
+    [ -n "$name" ] || name="Canon_$i"
+    # Disambiguate identical models (same mDNS instance name) with a suffix.
+    case "$seen" in
+        *" $name "*) name="${name}_$i" ;;
+    esac
+    seen="$seen$name "
+
+    lpadmin -p "$name" -E -v "$uri" -m everywhere 2>/dev/null \
+        && echo "Registered printer queue '$name' -> $uri"
+done
+
+# Install LaunchAgent. Unload and kill any previously running bridge first:
+# older builds left orphaned dns-sd advertisers behind on exit, and a stale
+# advertisement pointing at a dead port would shadow the new instance.
+launchctl unload /Library/LaunchAgents/com.pdrgds.pixma-bridge.plist 2>/dev/null
+pkill -f /usr/local/bin/pixma-bridge 2>/dev/null
+sleep 1
+pkill -f "dns-sd -R .* _uscan._tcp" 2>/dev/null
 mkdir -p /Library/LaunchAgents
 cp /usr/local/share/pixma/com.pdrgds.pixma-bridge.plist /Library/LaunchAgents/
 launchctl load /Library/LaunchAgents/com.pdrgds.pixma-bridge.plist 2>/dev/null

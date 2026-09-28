@@ -14,10 +14,11 @@ use pixma_protocol::scanner::session;
 
 use crate::translate;
 
-/// Shared daemon state.
+/// Shared daemon state. One instance per bridged scanner.
 #[derive(Clone)]
 pub struct AppState {
     pub uuid: String,
+    pub printer_model: String,
     pub printer_ip: IpAddr,
     pub scanning: Arc<AtomicBool>,
     pub active_job_id: Arc<Mutex<Option<String>>>,
@@ -32,7 +33,7 @@ const SCANNER_CAPABILITIES: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <scan:ScannerCapabilities xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03"
                           xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
   <pwg:Version>2.0</pwg:Version>
-  <pwg:MakeAndModel>Canon G3010 series</pwg:MakeAndModel>
+  <pwg:MakeAndModel>{model}</pwg:MakeAndModel>
   <scan:UUID>{uuid}</scan:UUID>
   <scan:Platen>
     <scan:PlatenInputCaps>
@@ -108,7 +109,9 @@ fn xml_response(body: String) -> Response {
 
 pub async fn get_capabilities(State(state): State<AppState>) -> Response {
     eprintln!("[escl] GET /eSCL/ScannerCapabilities");
-    let xml = SCANNER_CAPABILITIES.replace("{uuid}", &state.uuid);
+    let xml = SCANNER_CAPABILITIES
+        .replace("{uuid}", &state.uuid)
+        .replace("{model}", &state.printer_model);
     xml_response(xml)
 }
 

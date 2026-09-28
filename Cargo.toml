@@ -16,10 +16,10 @@ repository = "https://github.com/lastakhov/pixma-rs"
 anyhow = "1"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "io-util"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time", "io-util", "signal"] }
 mdns-sd = "0.18"
 image = "0.25"
 ipp = { version = "5", features = ["client-tls"] }
 axum = "0.8"
 quick-xml = "0.37"
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "v5"] }

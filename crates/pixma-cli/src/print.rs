@@ -1,27 +1,13 @@
-use std::net::IpAddr;
 use std::path::Path;
-use std::time::Duration;
 
 use anyhow::Result;
 use ipp::prelude::*;
-use pixma_protocol::discover;
+
+use crate::device;
 
 pub async fn run(file: String, device: Option<String>) -> Result<()> {
-    let printer_uri = match device {
-        Some(ip_str) => {
-            let ip: IpAddr = ip_str.parse()?;
-            format!("ipp://{}:631/ipp/print", ip)
-        }
-        None => {
-            eprintln!("Searching for Canon printers...");
-            let printers = discover::find_printers(Duration::from_secs(5)).await?;
-            let printer = printers.first().ok_or_else(|| {
-                anyhow::anyhow!("No Canon printer found. Use --device to specify an IP.")
-            })?;
-            eprintln!("Found: {} at {}", printer.model, printer.ip);
-            format!("ipp://{}:631/ipp/print", printer.ip)
-        }
-    };
+    let printer = device::resolve(device.as_deref(), false).await?;
+    let printer_uri = format!("ipp://{}:631/ipp/print", printer.ip);
 
     let uri: Uri = printer_uri.parse()?;
     let payload = IppPayload::new(std::fs::File::open(&file)?);

@@ -65,13 +65,37 @@ pixma scan document.png --resolution 600 --color grayscale
 pixma print document.pdf
 ```
 
+## Multiple printers
+
+Several PIXMA devices on the same network are supported side by side.
+
+**Scanning.** The bridge daemon bridges every scan-capable printer it discovers: each one gets its own eSCL service (ports 8470, 8471, …) advertised under the printer's own network name, so each scanner shows up separately in Image Capture and Preview. Two identical models that share a name are told apart by serial number, e.g. `Canon G3010 series` and `Canon G3010 series (012345)`. To bridge just one printer, run `pixma-bridge --device <ip>`.
+
+**Terminal.** `pixma discover` lists every device with its name, IP and serial number. `--device` accepts an IP address or any unique part of a printer's name, model or serial:
+
+```bash
+pixma discover                      # list all devices with name / IP / serial
+pixma scan out.jpg                  # one device: uses it; several: prompts to pick
+pixma scan out.jpg --device 192.168.1.50
+pixma scan out.jpg --device 012345  # serial fragment
+pixma print doc.pdf --device kitchen-g3010
+```
+
+**Printing.** Each device is registered as its own CUPS queue (the installer does this automatically). To add or rename queues manually:
+
+```bash
+lpadmin -p Canon_G3010_office -E -v "ipp://192.168.1.50:631/ipp/print" -m everywhere
+lpadmin -p Canon_G3010_home   -E -v "ipp://192.168.1.51:631/ipp/print" -m everywhere
+lpr -P Canon_G3010_office doc.pdf
+```
+
 ## Architecture
 
 ```
 macOS Image Capture / Preview
-        | (eSCL over HTTP, localhost:8470)
+        | (eSCL over HTTP, localhost:8470+)
         v
-  pixma-bridge daemon
+  pixma-bridge daemon        (one eSCL service per scanner)
         | (CHMP over HTTP, port 80)
         v
   Canon G3010 (Wi-Fi)
