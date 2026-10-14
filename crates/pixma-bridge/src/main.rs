@@ -198,8 +198,8 @@ async fn sync_bridges(
     servers: &mut HashMap<IpAddr, Bridged>,
     misses: &mut HashMap<IpAddr, u32>,
     found: Vec<Printer>,
+    seen_ips: &HashSet<IpAddr>,
 ) {
-    let found_ips: HashSet<IpAddr> = found.iter().map(|p| p.ip).collect();
 
     // Names must stay unique across running and newly discovered scanners.
     let mut combined: Vec<Printer> = servers.values().map(|b| b.printer.clone()).collect();
@@ -253,7 +253,7 @@ async fn sync_bridges(
         }
     }
 
-    bump_misses(misses, &found_ips);
+    bump_misses(misses, seen_ips);
     for addr in withdrawals(misses) {
         misses.remove(&addr);
         if let Some(mut bridged) = servers.remove(&addr) {
@@ -320,7 +320,17 @@ async fn main() -> Result<()> {
             eprintln!("pixma-bridge: configured --device printer is not visible");
         }
 
-        sync_bridges(&mut servers, &mut misses, found).await;
+        let mut seen_ips: HashSet<IpAddr> = found.iter().map(|p| p.ip).collect();
+        // Already-bridged scanners may be missing from this mDNS round when
+        // another printer slowed discovery; probe them individually so one bad
+        // device does not withdraw healthy scanners.
+        for ip in servers.keys().copied().collect::<Vec<_>>() {
+            if !seen_ips.contains(&ip) && discover::is_reachable(ip).await {
+                seen_ips.insert(ip);
+            }
+        }
+
+        sync_bridges(&mut servers, &mut misses, found, &seen_ips).await;
 
         tokio::select! {
             _ = &mut shutdown => {
