@@ -30,6 +30,8 @@ const POLL_INTERVAL: Duration = Duration::from_secs(30);
 /// long-gone ones disappear from Image Capture and return (same UUID) once
 /// they are back.
 const LOST_LIMIT: u32 = 10;
+/// Held for the process lifetime so only one bridge instance runs.
+const SINGLETON_PORT: u16 = 8479;
 
 #[derive(Parser)]
 #[command(name = "pixma-bridge", version, about = "eSCL-to-CHMP bridge daemon")]
@@ -72,9 +74,16 @@ fn unique_display_names(printers: &[Printer]) -> Vec<String> {
 fn scanner_uuid(printer: &Printer) -> String {
     let key = match printer.serial() {
         Some(serial) => format!("pixma-bridge/serial/{serial}"),
-        None => format!("pixma-bridge/name/{}", printer.name),
+        None => format!("pixma-bridge/name/{}/{}", printer.name, printer.ip),
     };
     uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, key.as_bytes()).to_string()
+}
+
+/// Refuse to start if another `pixma-bridge` already holds the singleton port.
+fn acquire_singleton() -> Result<StdTcpListener> {
+    let listener = StdTcpListener::bind(("127.0.0.1", SINGLETON_PORT))
+        .with_context(|| "another pixma-bridge is already running")?;
+    Ok(listener)
 }
 
 fn bind_listener(start: u16) -> Result<StdTcpListener> {
@@ -289,6 +298,7 @@ async fn find_scan_capable(device: Option<IpAddr>) -> Vec<Printer> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    let _singleton = acquire_singleton()?;
 
     eprintln!(
         "pixma-bridge: watching for Canon scanners (poll every {}s)",

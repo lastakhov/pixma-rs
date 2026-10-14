@@ -3,15 +3,14 @@
 # Register every discovered Canon printer with CUPS for printing, each with a
 # unique queue name so multiple PIXMA devices coexist.
 #
-# Registration uses the printer's mDNS/Bonjour (dnssd://) device URI rather
-# than a static IP. A hardcoded IP breaks whenever DHCP reassigns the
-# printer's address; the dnssd name resolves to the current address on every
-# job, the same way the scan bridge discovers the device via mDNS.
+# Scanning is separate: pixma-bridge advertises each Canon as its own AirScan
+# (_uscan._tcp) device. Open Image Capture or Preview — the scanner appears
+# there under the printer's network name, not inside the CUPS print queue.
 
 # Collect Canon dnssd URIs discovered by CUPS (Bonjour may need a few seconds
 # after install to surface them).
 URIS=""
-for attempt in 1 2 3 4 5; do
+for attempt in 1 2 3 4 5 6 8 10; do
     URIS=$(lpinfo -v 2>/dev/null | awk '/dnssd:\/\// && /[Cc]anon/ {print $2}')
     [ -n "$URIS" ] && break
     sleep 2
@@ -56,15 +55,34 @@ for uri in $URIS; do
         && echo "Registered printer queue '$name' -> $uri"
 done
 
-# Install LaunchAgent. Unload and kill any previously running bridge first:
-# older builds left orphaned dns-sd advertisers behind on exit, and a stale
-# advertisement pointing at a dead port would shadow the new instance.
-launchctl unload /Library/LaunchAgents/com.pdrgds.pixma-bridge.plist 2>/dev/null
-pkill -f /usr/local/bin/pixma-bridge 2>/dev/null
+LABEL="com.pdrgds.pixma-bridge"
+DAEMON_PLIST="/Library/LaunchDaemons/${LABEL}.plist"
+AGENT_PLIST="/Library/LaunchAgents/${LABEL}.plist"
+SRC_PLIST="/usr/local/share/pixma/${LABEL}.plist"
+
+# One system-wide bridge (LaunchDaemon). Older installs used LaunchAgents and
+# could leave two copies running, which breaks scanning in Image Capture.
+pkill -f /usr/local/bin/pixma-bridge 2>/dev/null || true
 sleep 1
-pkill -f "dns-sd -R .* _uscan._tcp" 2>/dev/null
-mkdir -p /Library/LaunchAgents
-cp /usr/local/share/pixma/com.pdrgds.pixma-bridge.plist /Library/LaunchAgents/
-launchctl load /Library/LaunchAgents/com.pdrgds.pixma-bridge.plist 2>/dev/null
+pkill -9 -f /usr/local/bin/pixma-bridge 2>/dev/null || true
+pkill -f "dns-sd -R .* _uscan._tcp" 2>/dev/null || true
+
+launchctl bootout system "$DAEMON_PLIST" 2>/dev/null || true
+launchctl bootout "gui/$(id -u)" "$AGENT_PLIST" 2>/dev/null || true
+launchctl unload "$AGENT_PLIST" 2>/dev/null || true
+rm -f "$AGENT_PLIST"
+
+mkdir -p /Library/LaunchDaemons
+cp "$SRC_PLIST" "$DAEMON_PLIST"
+chmod 644 "$DAEMON_PLIST"
+
+launchctl bootstrap system "$DAEMON_PLIST" 2>/dev/null \
+    || launchctl load -w "$DAEMON_PLIST" 2>/dev/null
+launchctl kickstart -k "system/${LABEL}" 2>/dev/null || true
+
+echo ""
+echo "Printing: use the Canon queue in System Settings -> Printers."
+echo "Scanning: open Image Capture (or Preview -> Import from Scanner);"
+echo "          the scanner appears as a separate device with the printer name."
 
 exit 0

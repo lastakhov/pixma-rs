@@ -12,6 +12,8 @@
   <true/>
   <key>KeepAlive</key>
   <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
   <key>StandardOutPath</key>
   <string>/tmp/pixma-bridge.log</string>
   <key>StandardErrorPath</key>

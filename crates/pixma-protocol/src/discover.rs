@@ -34,12 +34,25 @@ impl Printer {
     }
 }
 
+fn primary_ip(info: &ResolvedService) -> Option<IpAddr> {
+    for scoped in info.get_addresses() {
+        let ip = scoped.to_ip_addr();
+        if ip.is_ipv4() {
+            return Some(ip);
+        }
+    }
+    info.get_addresses().iter().next().map(|scoped| scoped.to_ip_addr())
+}
+
 fn printer_from_mdns(info: &ResolvedService) -> Option<Printer> {
+    if !info.is_valid() {
+        return None;
+    }
     let fullname = info.get_fullname().to_lowercase();
     if !fullname.contains("canon") {
         return None;
     }
-    let ip = info.get_addresses_v4().into_iter().next()?;
+    let ip = primary_ip(info)?;
     let name = info
         .get_fullname()
         .split("._")
@@ -57,20 +70,26 @@ fn printer_from_mdns(info: &ResolvedService) -> Option<Printer> {
     Some(Printer {
         name,
         model,
-        ip: IpAddr::V4(ip),
+        ip,
         mac: None,
         identity: None,
         scan_capable,
     })
 }
 
-async fn attach_identity(printer: Printer) -> Printer {
+fn identity_implies_scan(identity: &str) -> bool {
+    identity.contains("CHMP") || identity.contains("IVEC")
+}
+
+async fn attach_identity(mut printer: Printer) -> Printer {
     let bjnp_addr = SocketAddr::new(printer.ip, udp::BJNP_SCAN_PORT);
-    let identity = udp::get_identity(bjnp_addr).await.ok();
-    Printer {
-        identity,
-        ..printer
+    if let Ok(identity) = udp::get_identity(bjnp_addr).await {
+        printer.identity = Some(identity.clone());
+        if !printer.scan_capable && identity_implies_scan(&identity) {
+            printer.scan_capable = true;
+        }
     }
+    printer
 }
 
 /// Quick liveness check for a known printer IP (used by the bridge so one
@@ -108,19 +127,19 @@ pub async fn find_printers(timeout: Duration) -> Result<Vec<Printer>, PixmaError
         }
     }
 
-    let _ = mdns.shutdown();
+    drop(mdns);
 
+    let probe_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     let mut join_set = tokio::task::JoinSet::new();
     for stub in stubs {
         join_set.spawn(attach_identity(stub));
     }
     let mut printers = Vec::new();
-    while let Some(result) = join_set.join_next().await {
-        match result {
-            Ok(printer) => printers.push(printer),
-            Err(e) => {
-                return Err(PixmaError::Protocol(format!("identity probe task: {e}")));
-            }
+    loop {
+        match tokio::time::timeout_at(probe_deadline, join_set.join_next()).await {
+            Ok(Some(Ok(printer))) => printers.push(printer),
+            Ok(Some(Err(e))) => eprintln!("pixma discover: identity probe task failed: {e}"),
+            Ok(None) | Err(_) => break,
         }
     }
 
