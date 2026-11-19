@@ -17,4 +17,3 @@ uuid.workspace = true
 tokio.workspace = true
 mdns-sd.workspace = true
 anyhow.workspace = true
-hostname = "0.4"

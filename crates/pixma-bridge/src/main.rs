@@ -6,7 +6,7 @@ use std::net::{IpAddr, TcpListener as StdTcpListener};
 use std::process::{Child, Command};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use axum::http::StatusCode;
@@ -30,6 +30,9 @@ const POLL_INTERVAL: Duration = Duration::from_secs(30);
 /// long-gone ones disappear from Image Capture and return (same UUID) once
 /// they are back.
 const LOST_LIMIT: u32 = 10;
+/// If the poll sleep finishes this much later than requested, the host likely
+/// resumed from system sleep — tear down bridges and rediscover immediately.
+const RESUME_SLOP: Duration = Duration::from_secs(5);
 /// Held for the process lifetime so only one bridge instance runs.
 const SINGLETON_PORT: u16 = 8479;
 
@@ -50,19 +53,21 @@ struct Bridged {
     dns_sd: Child,
 }
 
-/// Scanner display names for Bonjour: the printer's own mDNS name, made unique
-/// with the serial number (or IP) when two identical models share a name.
+/// Bonjour display names: always include the printer's mDNS host target or IP;
+/// add the serial when two devices would still collide.
 fn unique_display_names(printers: &[Printer]) -> Vec<String> {
-    printers
-        .iter()
-        .map(|p| {
-            let duplicates = printers.iter().filter(|q| q.name == p.name).count();
+    let base: Vec<String> = printers.iter().map(Printer::display_name).collect();
+    base.iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let duplicates = base.iter().filter(|n| *n == name).count();
             if duplicates < 2 {
-                return p.name.clone();
+                return name.clone();
             }
+            let p = &printers[i];
             match p.serial() {
-                Some(serial) => format!("{} ({serial})", p.name),
-                None => format!("{} (@ {})", p.name, p.ip),
+                Some(serial) => format!("{name} [{serial}]"),
+                None => format!("{name} [{}]", p.ip),
             }
         })
         .collect()
@@ -203,6 +208,24 @@ async fn serve(printer: &Printer, display_name: &str) -> Result<(u16, Bridged)> 
 /// appeared scanners, withdraw long-gone ones, refresh names if a collision
 /// appeared. `misses` persists across rounds so withdrawal only happens after
 /// LOST_LIMIT consecutive bad discoveries.
+/// Drop every active bridge (eSCL server + Bonjour advertisement). Used after
+/// system resume so stale HTTP/CHMP state cannot leave Image Capture hung.
+fn withdraw_all(servers: &mut HashMap<IpAddr, Bridged>, misses: &mut HashMap<IpAddr, u32>) {
+    if servers.is_empty() {
+        return;
+    }
+    eprintln!(
+        "pixma-bridge: refreshing {} bridged scanner(s)",
+        servers.len()
+    );
+    for mut bridged in servers.drain() {
+        let _ = bridged.1.dns_sd.kill();
+        let _ = bridged.1.dns_sd.wait();
+        bridged.1.server.abort();
+    }
+    misses.clear();
+}
+
 async fn sync_bridges(
     servers: &mut HashMap<IpAddr, Bridged>,
     misses: &mut HashMap<IpAddr, u32>,
@@ -342,6 +365,7 @@ async fn main() -> Result<()> {
 
         sync_bridges(&mut servers, &mut misses, found, &seen_ips).await;
 
+        let poll_started = Instant::now();
         tokio::select! {
             _ = &mut shutdown => {
                 eprintln!("pixma-bridge: shutting down, {} scanner(s)", servers.len());
@@ -353,6 +377,14 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
             _ = tokio::time::sleep(POLL_INTERVAL) => {}
+        }
+        let poll_elapsed = poll_started.elapsed();
+        if poll_elapsed > POLL_INTERVAL + RESUME_SLOP {
+            eprintln!(
+                "pixma-bridge: system resume detected (paused {}s); rediscovering scanners",
+                poll_elapsed.as_secs()
+            );
+            withdraw_all(&mut servers, &mut misses);
         }
     }
 }
@@ -385,11 +417,12 @@ mod tests {
     use super::*;
     use std::net::Ipv4Addr;
 
-    fn printer(name: &str, ip: u8, serial: Option<&str>) -> Printer {
+    fn printer(name: &str, ip: u8, serial: Option<&str>, hostname: Option<&str>) -> Printer {
         Printer {
             name: name.into(),
             model: "Canon PIXMA G3010".into(),
             ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, ip)),
+            hostname: hostname.map(String::from),
             mac: None,
             identity: serial.map(|s| format!("MFG:Canon;MDL:G3010 series;SER:{s};CLS:PRINTER")),
             scan_capable: true,
@@ -401,40 +434,55 @@ mod tests {
     }
 
     #[test]
-    fn distinct_names_left_alone() {
-        let printers = vec![printer("Canon G3010 series", 50, None), printer("Study", 51, None)];
-        let names = unique_display_names(&printers);
-        assert_eq!(names, vec!["Canon G3010 series", "Study"]);
-    }
-
-    #[test]
-    fn duplicate_names_get_serial_suffix() {
+    fn distinct_names_include_host_or_ip() {
         let printers = vec![
-            printer("Canon G3010 series", 50, Some("AAA1")),
-            printer("Canon G3010 series", 51, Some("BBB2")),
+            printer("Canon G3010 series", 50, None, Some("office-canon.local.")),
+            printer("Study", 51, None, None),
         ];
         let names = unique_display_names(&printers);
         assert_eq!(
             names,
-            vec!["Canon G3010 series (AAA1)", "Canon G3010 series (BBB2)"]
+            vec!["Canon G3010 series (office-canon)", "Study (192.168.1.51)"]
         );
     }
 
     #[test]
-    fn duplicate_names_without_serial_fall_back_to_ip() {
-        let printers = vec![printer("Canon G3010 series", 50, None), printer("Canon G3010 series", 51, None)];
+    fn duplicate_display_names_get_serial_suffix() {
+        let printers = vec![
+            printer("Canon G3010 series", 50, Some("AAA1"), Some("canon.local.")),
+            printer("Canon G3010 series", 51, Some("BBB2"), Some("canon.local.")),
+        ];
         let names = unique_display_names(&printers);
         assert_eq!(
             names,
-            vec!["Canon G3010 series (@ 192.168.1.50)", "Canon G3010 series (@ 192.168.1.51)"]
+            vec![
+                "Canon G3010 series (canon) [AAA1]",
+                "Canon G3010 series (canon) [BBB2]"
+            ]
+        );
+    }
+
+    #[test]
+    fn duplicate_names_without_serial_fall_back_to_ip_in_brackets() {
+        let printers = vec![
+            printer("Canon G3010 series", 50, None, Some("canon.local.")),
+            printer("Canon G3010 series", 51, None, Some("canon.local.")),
+        ];
+        let names = unique_display_names(&printers);
+        assert_eq!(
+            names,
+            vec![
+                "Canon G3010 series (canon) [192.168.1.50]",
+                "Canon G3010 series (canon) [192.168.1.51]"
+            ]
         );
     }
 
     #[test]
     fn uuid_stable_across_restarts_and_distinct_per_device() {
-        let a = printer("Canon G3010 series", 50, Some("AAA1"));
-        let a_restart = printer("Canon G3010 series", 77, Some("AAA1"));
-        let b = printer("Canon G3010 series", 51, Some("BBB2"));
+        let a = printer("Canon G3010 series", 50, Some("AAA1"), None);
+        let a_restart = printer("Canon G3010 series", 77, Some("AAA1"), None);
+        let b = printer("Canon G3010 series", 51, Some("BBB2"), None);
         assert_eq!(scanner_uuid(&a), scanner_uuid(&a_restart));
         assert_ne!(scanner_uuid(&a), scanner_uuid(&b));
     }

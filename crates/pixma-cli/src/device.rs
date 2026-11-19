@@ -9,7 +9,7 @@ const DISCOVER_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// One-line summary of a printer for selection lists.
 fn summary(p: &Printer) -> String {
-    let mut line = format!("{}  {}", p.name, p.ip);
+    let mut line = format!("{}  {}", p.display_name(), p.ip);
     if let Some(serial) = p.serial() {
         line.push_str(&format!("  (serial {serial})"));
     }
@@ -40,6 +40,7 @@ pub async fn resolve(spec: Option<&str>, need_scan: bool) -> Result<Printer> {
             name: spec.to_string(),
             model: String::new(),
             ip,
+            hostname: None,
             mac: None,
             identity: None,
             scan_capable: true,
@@ -144,6 +145,7 @@ mod tests {
             name: name.into(),
             model: "Canon PIXMA G3010".into(),
             ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, ip)),
+            hostname: None,
             mac: None,
             identity: None,
             scan_capable: true,

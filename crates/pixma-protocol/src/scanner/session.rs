@@ -2,8 +2,13 @@ use std::net::IpAddr;
 use std::time::Duration;
 
 use crate::chmp::ChmpConnection;
+use crate::discover;
 use crate::error::PixmaError;
 use crate::scanner::commands::*;
+
+/// How long to wait for a sleeping printer to answer on port 80 before scan.
+const WAKE_PROBE_ATTEMPTS: u32 = 20;
+const WAKE_PROBE_INTERVAL: Duration = Duration::from_millis(500);
 
 /// Block size for ReadImage in 64KB units (0x0020 = 32 * 64KB = 2MB).
 const READ_BLOCK_SIZE_64K: u16 = 0x0020;
@@ -73,6 +78,7 @@ pub async fn scan(
         "[scan] connecting to {ip} — {}dpi {:?} {}x{} at ({},{})",
         params.dpi, params.color, params.width, params.height, params.x, params.y
     );
+    discover::wait_reachable(ip, WAKE_PROBE_ATTEMPTS, WAKE_PROBE_INTERVAL).await?;
     let mut conn = ChmpConnection::connect(ip, None).await?;
 
     // Step 1: ModeShift with blank jobID (pre-session)

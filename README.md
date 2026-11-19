@@ -32,7 +32,7 @@ This driver bridges the gap: it translates between macOS's native AirScan protoc
 
 ### Option 1: .pkg installer (easiest)
 
-Download `PixmaDriver-0.1.2.pkg` from [Releases](https://github.com/lastakhov/pixma-rs/releases). Right-click, Open (to bypass Gatekeeper since it's unsigned).
+Download `PixmaDriver-0.1.6.pkg` from [Releases](https://github.com/lastakhov/pixma-rs/releases). Right-click, Open (to bypass Gatekeeper since it's unsigned).
 
 This installs the CLI, starts the bridge daemon, and registers the printer with CUPS. Printing and scanning work immediately.
 
@@ -69,7 +69,7 @@ pixma print document.pdf
 
 Several PIXMA devices on the same network are supported side by side.
 
-**Scanning.** The bridge daemon watches the network and bridges every scan-capable Canon printer it finds: each one gets its own eSCL service (ports 8470, 8471, …) advertised under the printer's own network name, so each scanner shows up separately in Image Capture and Preview. Scanners powered on later are picked up automatically, and two identical models that share a name are told apart by serial number, e.g. `Canon G3010 series` and `Canon G3010 series (012345)`. To bridge just one printer, run `pixma-bridge --device <ip>`.
+**Scanning.** The bridge daemon watches the network and bridges every scan-capable Canon printer it finds: each one gets its own eSCL service (ports 8470, 8471, …) advertised as `Model name (hostname)` or `Model name (IP)` from Bonjour, so each scanner shows up separately in Image Capture and Preview. Scanners powered on later are picked up automatically; if two units would still share a label, the serial is appended. After the Mac wakes from sleep, the bridge tears down and re-advertises scanners so Image Capture does not hang on stale sessions. To bridge just one printer, run `pixma-bridge --device <ip>`.
 
 **Terminal.** `pixma discover` lists every device with its name, IP and serial number. `--device` accepts an IP address or any unique part of a printer's name, model or serial:
 

@@ -19,12 +19,35 @@ pub struct Printer {
     pub name: String,
     pub model: String,
     pub ip: IpAddr,
+    /// Bonjour host target from the _ipp._tcp SRV record (e.g. `Canon-ab12cd.local`).
+    pub hostname: Option<String>,
     pub mac: Option<[u8; 6]>,
     pub identity: Option<String>,
     pub scan_capable: bool,
 }
 
+/// Strip a trailing `.local` (and optional dot) from an mDNS host target.
+pub fn host_label(hostname: &str) -> &str {
+    hostname
+        .trim_end_matches('.')
+        .strip_suffix(".local")
+        .unwrap_or(hostname)
+}
+
 impl Printer {
+    /// Human-facing label: mDNS instance name plus host name or IP so identical
+    /// models (USB share vs Wi‑Fi, or two units on the LAN) stay distinct.
+    pub fn display_name(&self) -> String {
+        let tag = self
+            .hostname
+            .as_deref()
+            .map(host_label)
+            .filter(|h| !h.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| self.ip.to_string());
+        format!("{} ({tag})", self.name)
+    }
+
     /// Serial number parsed from the BJNP IEEE 1284 identity string (`SER:...`).
     pub fn serial(&self) -> Option<&str> {
         self.identity
@@ -67,10 +90,19 @@ fn printer_from_mdns(info: &ResolvedService) -> Option<Printer> {
     let scan_capable = info
         .get_property_val_str("Scan")
         .is_some_and(|v| v == "T");
+    let hostname = {
+        let h = info.get_hostname();
+        if h.is_empty() {
+            None
+        } else {
+            Some(h.to_string())
+        }
+    };
     Some(Printer {
         name,
         model,
         ip,
+        hostname,
         mac: None,
         identity: None,
         scan_capable,
@@ -99,6 +131,29 @@ pub async fn is_reachable(ip: IpAddr) -> bool {
     tokio::time::timeout(REACHABILITY_TIMEOUT, TcpStream::connect(&addr))
         .await
         .is_ok_and(|result| result.is_ok())
+}
+
+/// Wait until the printer answers on TCP/80 (wakes a sleeping printer). Used
+/// before CHMP scan when the unit may be in power-save mode.
+pub async fn wait_reachable(
+    ip: IpAddr,
+    attempts: u32,
+    interval: Duration,
+) -> Result<(), PixmaError> {
+    for i in 0..attempts {
+        if is_reachable(ip).await {
+            if i > 0 {
+                eprintln!("pixma: printer at {ip} reachable after {i} probe(s)");
+            }
+            return Ok(());
+        }
+        if i + 1 < attempts {
+            tokio::time::sleep(interval).await;
+        }
+    }
+    Err(PixmaError::Protocol(format!(
+        "printer at {ip} not reachable after {attempts} attempts (offline or asleep)"
+    )))
 }
 
 /// Discover Canon printers using mDNS. Extracts model from TXT records,
@@ -158,10 +213,27 @@ mod tests {
             name: "Canon G3010 series".into(),
             model: "Canon PIXMA G3010".into(),
             ip: IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            hostname: Some("Canon-g3010.local.".into()),
             mac: None,
             identity: identity.map(String::from),
             scan_capable: true,
         }
+    }
+
+    #[test]
+    fn display_name_uses_hostname() {
+        let p = printer(None);
+        assert_eq!(p.display_name(), "Canon G3010 series (Canon-g3010)");
+    }
+
+    #[test]
+    fn display_name_falls_back_to_ip() {
+        let mut p = printer(None);
+        p.hostname = None;
+        assert_eq!(
+            p.display_name(),
+            format!("Canon G3010 series ({})", p.ip)
+        );
     }
 
     #[test]

@@ -22,8 +22,11 @@ if [ -z "$URIS" ]; then
     URIS=$(/usr/local/bin/pixma discover 2>/dev/null | awk '/^  IP:/ {print "ipp://"$2":631/ipp/print"}')
 fi
 
-# Derive a CUPS-safe queue name from the device URI:
-#   dnssd://Canon%20G3010%20series._ipp._tcp.local/ -> Canon_G3010_series
+DISCOVER_LINES=$(/usr/local/bin/pixma discover 2>/dev/null || true)
+
+# Derive a CUPS-safe queue name from the device URI. Prefer hostname or IP so
+# two identical models (USB vs Wi‑Fi, or two units on the LAN) do not collide:
+#   dnssd://Canon%20G3010%20series._ipp._tcp.local/ + IP from pixma discover
 #   ipp://192.168.1.50:631/ipp/print                -> Canon_192_168_1_50
 queue_name() {
     case "$1" in
@@ -31,10 +34,27 @@ queue_name() {
             printf 'Canon_%s' "$(printf '%s' "$1" | sed -e 's|^ipp://||' -e 's|:.*$||' | tr . _)"
             ;;
         *)
-            printf '%s' "$1" \
+            local instance host ip
+            instance=$(printf '%s' "$1" \
                 | sed -e 's|^dnssd://||' -e 's|\._ipp._tcp\.local.*$||' \
                 | sed -e 's|%[0-9A-Fa-f][0-9A-Fa-f]|_|g' \
-                | tr -c 'A-Za-z0-9_' '_'
+                | tr -c 'A-Za-z0-9_' '_')
+            ip=$(printf '%s\n' "$DISCOVER_LINES" | awk -v inst="$1" '
+                $0 ~ inst { getline; while ($0 ~ /^  /) { if ($1=="IP:") { print $2; exit } getline } }
+            ')
+            host=$(printf '%s\n' "$DISCOVER_LINES" | awk -v inst="$1" '
+                BEGIN { want=0 }
+                $0 ~ inst { want=1; next }
+                want && $1=="Host:" { print $2; exit }
+                want && $0 == "" { want=0 }
+            ')
+            if [ -n "$host" ]; then
+                printf 'Canon_%s_%s' "$instance" "$(printf '%s' "$host" | tr -c 'A-Za-z0-9_' '_')"
+            elif [ -n "$ip" ]; then
+                printf 'Canon_%s_%s' "$instance" "$(printf '%s' "$ip" | tr . _)"
+            else
+                printf '%s' "$instance"
+            fi
             ;;
     esac
 }

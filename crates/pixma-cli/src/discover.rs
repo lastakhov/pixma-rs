@@ -15,11 +15,14 @@ pub async fn run(timeout: u64) -> Result<()> {
     println!("Found {} Canon printer(s):", printers.len());
     println!();
     for p in &printers {
-        println!("{}", p.name);
+        println!("{}", p.display_name());
         if !p.model.is_empty() && !p.name.eq_ignore_ascii_case(&p.model) {
             println!("  Model: {}", p.model);
         }
         println!("  IP: {}", p.ip);
+        if let Some(host) = p.hostname.as_deref().map(discover::host_label) {
+            println!("  Host: {host}");
+        }
         if let Some(mac) = p.mac {
             let mac_str: Vec<String> = mac.iter().map(|b| format!("{b:02x}")).collect();
             println!("  MAC: {}", mac_str.join(":"));
