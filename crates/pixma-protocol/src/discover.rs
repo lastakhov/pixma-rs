@@ -11,6 +11,8 @@ use crate::error::PixmaError;
 /// Short TCP probe — CHMP scans/prints use port 80 on the printer.
 const REACHABILITY_TIMEOUT: Duration = Duration::from_secs(2);
 
+const IPP_SERVICE: &str = "_ipp._tcp.local.";
+
 /// A Canon printer found on the network.
 #[derive(Debug, Clone)]
 pub struct Printer {
@@ -156,15 +158,52 @@ pub async fn wait_reachable(
     )))
 }
 
+fn shutdown_mdns(mdns: &ServiceDaemon) {
+    if let Ok(rx) = mdns.shutdown() {
+        let _ = rx.recv_timeout(Duration::from_secs(2));
+    }
+}
+
+/// Long-lived mDNS handle for repeated discovery (e.g. the bridge poll loop).
+///
+/// `ServiceDaemon::new()` spawns a background thread; dropping the daemon
+/// without [`ServiceDaemon::shutdown`] leaks that thread. A one-shot caller
+/// can use [`find_printers`]; daemons that poll should hold a [`Discoverer`].
+pub struct Discoverer {
+    mdns: ServiceDaemon,
+}
+
+impl Discoverer {
+    pub fn new() -> Result<Self, PixmaError> {
+        ServiceDaemon::new()
+            .map_err(|e| PixmaError::Protocol(e.to_string()))
+            .map(|mdns| Self { mdns })
+    }
+
+    pub async fn find_printers(&self, timeout: Duration) -> Result<Vec<Printer>, PixmaError> {
+        find_printers_with(&self.mdns, timeout).await
+    }
+}
+
+impl Drop for Discoverer {
+    fn drop(&mut self) {
+        shutdown_mdns(&self.mdns);
+    }
+}
+
 /// Discover Canon printers using mDNS. Extracts model from TXT records,
 /// then optionally probes BJNP for the full IEEE 1284 identity string.
 ///
 /// mDNS browsing and BJNP identity probes are kept separate so a slow or
 /// dead printer cannot block discovery of the rest (probes run in parallel).
 pub async fn find_printers(timeout: Duration) -> Result<Vec<Printer>, PixmaError> {
-    let mdns = ServiceDaemon::new().map_err(|e| PixmaError::Protocol(e.to_string()))?;
+    let discoverer = Discoverer::new()?;
+    discoverer.find_printers(timeout).await
+}
+
+async fn find_printers_with(mdns: &ServiceDaemon, timeout: Duration) -> Result<Vec<Printer>, PixmaError> {
     let receiver = mdns
-        .browse("_ipp._tcp.local.")
+        .browse(IPP_SERVICE)
         .map_err(|e| PixmaError::Protocol(e.to_string()))?;
 
     let mut stubs = Vec::new();
@@ -182,7 +221,7 @@ pub async fn find_printers(timeout: Duration) -> Result<Vec<Printer>, PixmaError
         }
     }
 
-    drop(mdns);
+    let _ = mdns.stop_browse(IPP_SERVICE);
 
     let probe_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     let mut join_set = tokio::task::JoinSet::new();

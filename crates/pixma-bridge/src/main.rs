@@ -300,10 +300,17 @@ async fn sync_bridges(
     }
 }
 
-async fn find_scan_capable(device: Option<IpAddr>) -> Vec<Printer> {
-    let printers = discover::find_printers(DISCOVER_TIMEOUT)
+async fn find_scan_capable(
+    discoverer: &discover::Discoverer,
+    device: Option<IpAddr>,
+) -> Vec<Printer> {
+    let printers = discoverer
+        .find_printers(DISCOVER_TIMEOUT)
         .await
-        .unwrap_or_default();
+        .unwrap_or_else(|e| {
+            eprintln!("pixma-bridge: discovery failed: {e}");
+            vec![]
+        });
     let mut capable: Vec<Printer> = printers.into_iter().filter(|p| p.scan_capable).collect();
 
     // The same physical printer can answer under several IPs (mDNS records
@@ -322,6 +329,7 @@ async fn find_scan_capable(device: Option<IpAddr>) -> Vec<Printer> {
 async fn main() -> Result<()> {
     let args = Args::parse();
     let _singleton = acquire_singleton()?;
+    let discoverer = discover::Discoverer::new().context("initializing mDNS discovery")?;
 
     eprintln!(
         "pixma-bridge: watching for Canon scanners (poll every {}s)",
@@ -334,7 +342,7 @@ async fn main() -> Result<()> {
     let mut shutdown = std::pin::pin!(shutdown_signal());
 
     loop {
-        let found = find_scan_capable(args.device).await;
+        let found = find_scan_capable(&discoverer, args.device).await;
 
         if found.is_empty() && servers.is_empty() && !reported_empty {
             let where_ = match args.device {
