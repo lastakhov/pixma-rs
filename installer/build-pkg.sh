@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-VERSION="0.1.6"
+VERSION="0.1.7"
 BUILD_DIR="$(mktemp -d)"
 
 echo "Building release binaries..."
